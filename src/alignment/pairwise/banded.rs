@@ -41,6 +41,8 @@ use utils::TextSlice;
 use std::cmp::min;
 use std::cmp::max;
 use std::ops::Range;
+use smallvec::SmallVec;
+type SmallVec4<T> = SmallVec<[T; 4]>;
 
 use super::*;
 use alignment::sparse;
@@ -80,7 +82,7 @@ macro_rules! align_banded {
                     $aligner.S[$state.col][jj] = MIN_SCORE;
                 } 
 
-                while $state.j <= min($state.m, band.ranges[$state.i].end) {
+                while $state.j < min($state.m + 1, band.ranges[$state.i].end) {
                     // read next x symbol
                     let a = $x[$state.j - 1];
 
@@ -116,14 +118,29 @@ macro_rules! align_banded {
                     $state.score = $aligner.S[prev][$state.j-1] + match_score;
                     tb.set_s(TBSUBST);
 
-                    let from_d = $aligner.D[prev][$state.j-1] + match_score;
-                    let from_i = $aligner.I[prev][$state.j-1] + match_score;
+                    // Small del
+                    let small_del= $aligner.S[prev][$state.j] + $aligner.gap_small;
+                    if small_del > $state.score {
+                        $state.score = small_del;
+                        tb.set_s(TBSDEL);
+                    }
 
+                    // Small ins
+                    let small_ins = $aligner.S[$state.col][$state.j-1] + $aligner.gap_small;
+                    if small_ins > $state.score {
+                        $state.score = small_ins;
+                        tb.set_s(TBSINS);
+                    }
+
+                    // end big del
+                    let from_d = $aligner.D[prev][$state.j-1] + match_score;
                     if from_d > $state.score {
                         $state.score = from_d;
                         tb.set_s(TBDEL);
                     }
 
+                    // end big ins
+                    let from_i = $aligner.I[prev][$state.j-1] + match_score;
                     if from_i > $state.score {
                         $state.score = from_i;
                         tb.set_s(TBINS);
@@ -166,6 +183,7 @@ pub struct Aligner<'a, F>
     I: [Vec<i32>; 2],
     D: [Vec<i32>; 2],
     traceback: Traceback,
+    gap_small: i32,
     gap_open: i32,
     gap_extend: i32,
     score: &'a F,
@@ -190,9 +208,10 @@ impl<'a, F> Aligner<'a, F>
     /// * `gap_extend` - the score for extending a gap (should be negative)
     /// * `score` - function that returns the score for substitutions (also see bio::scores)
     ///
-    pub fn new(gap_open: i32, gap_extend: i32, score: &'a F, k: usize, w: usize) -> Self {
+    pub fn new(gap_small: i32, gap_open: i32, gap_extend: i32, score: &'a F, k: usize, w: usize) -> Self {
         Aligner::with_capacity(DEFAULT_ALIGNER_CAPACITY,
                                DEFAULT_ALIGNER_CAPACITY,
+                               gap_small,
                                gap_open,
                                gap_extend,
                                score, k, w)
@@ -209,7 +228,7 @@ impl<'a, F> Aligner<'a, F>
     /// * `gap_extend` - the score for extending a gap (should be negative)
     /// * `score` - function that returns the score for substitutions (also see bio::scores)
     ///
-    pub fn with_capacity(m: usize, n: usize, gap_open: i32, gap_extend: i32, score: &'a F, k: usize, w: usize) -> Self {
+    pub fn with_capacity(m: usize, n: usize, gap_small: i32, gap_open: i32, gap_extend: i32, score: &'a F, k: usize, w: usize) -> Self {
         let get_vec = || Vec::with_capacity(m + 1);
 
         let band = Rc::new(Band { ranges: vec![(0..1)] });
@@ -219,7 +238,8 @@ impl<'a, F> Aligner<'a, F>
             S: [get_vec(), get_vec()],
             I: [get_vec(), get_vec()],
             D: [get_vec(), get_vec()],
-            traceback: Traceback::with_capacity(m,n),
+            traceback: Traceback::with_capacity(1,1),
+            gap_small: gap_small,
             gap_open: gap_open,
             gap_extend: gap_extend,
             score: score,
@@ -249,10 +269,10 @@ impl<'a, F> Aligner<'a, F>
             let _band = Band::create_local(x,y, k, self.w, self.gap_open, self.gap_extend);
             let band = Rc::new(_band);
             self.band = band.clone();
-            self.traceback = Traceback::with_capacity(m, n);
+            self.traceback = Traceback::with_capacity(1, n);
         }
 
-        self.traceback.init(m, n, alignment_type);
+        self.traceback.init(m, n, alignment_type, Some(self.band.clone()));
 
         // set minimum score to -inf, and allow to add gap_extend
         // without overflow
@@ -320,6 +340,7 @@ impl<'a, F> Aligner<'a, F>
 
 
     /// Calculate local alignment of x against y.
+    #[inline(never)]
     pub fn local(&mut self, x: TextSlice, y: TextSlice) -> Alignment {
         self.init(x, y, AlignmentType::Local);
 
@@ -430,7 +451,7 @@ impl<'a, F> Aligner<'a, F>
 }
 
 #[derive(Clone, Debug)]
-struct Band {
+pub struct Band {
     ranges: Vec<Range<usize>>
 }
 
@@ -472,17 +493,21 @@ pub fn key_line<I: Iterator<Item=(u32, u32)>>(mut kmer_starts: I, _k: usize) -> 
 
 impl Band {
 
+    pub fn get(&self, col: usize) -> Range<usize> {
+        self.ranges[col].clone()
+    }
 
+    #[inline(never)]
     pub fn find_kmer_matches<T: AsRef<[u8]>>(seq1: &T, seq2: &T, k: usize) -> Vec<(u32, u32)> {
 
         let slc1 = seq1.as_ref();
         let slc2 = seq2.as_ref();
 
-        let mut set: HashMap<&[u8], Vec<u32>> = HashMap::new();
+        let mut set: HashMap<&[u8], SmallVec4<u32>> = HashMap::new();
         let mut matches = Vec::new();
 
         for i in 0 .. slc1.len() - k + 1 {
-            set.entry(&slc1[i..i+k]).or_insert_with(|| Vec::new()).push(i as u32);
+            set.entry(&slc1[i..i+k]).or_insert_with(|| SmallVec4::new()).push(i as u32);
         }
 
         for i in 0 .. slc2.len() - k + 1 {
@@ -501,6 +526,7 @@ impl Band {
         matches
     }
 
+    #[inline(never)]
     pub fn create_local(x: TextSlice, y: TextSlice, k: usize, w: usize, gap_open: i32, gap_extend: i32) -> Band {
         let matches = Band::find_kmer_matches(&x,&y,k);
         let res = sparse::sdpkpp(&matches, k, 2, gap_open, gap_extend);
@@ -624,7 +650,7 @@ mod banded {
         };
 
         
-        let mut banded_aligner = banded::Aligner::with_capacity(x.len(), y.len(), -5, -1, &score, 10, 10);
+        let mut banded_aligner = banded::Aligner::with_capacity(x.len(), y.len(), -6, -5, -1, &score, 10, 10);
         let banded_alignment = banded_aligner.local(x, y);
 
         let mut full_aligner = pairwise::Aligner::with_capacity(x.len(), y.len(), -5, -1, &score);

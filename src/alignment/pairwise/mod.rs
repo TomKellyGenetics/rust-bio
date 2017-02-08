@@ -41,6 +41,8 @@ use std::iter::repeat;
 
 use alignment::{Alignment, AlignmentOperation};
 use utils::TextSlice;
+use std::ops::Range;
+use std::rc::Rc;
 
 pub mod banded;
 
@@ -242,7 +244,7 @@ impl<'a, F> Aligner<'a, F>
 
     fn init(&mut self, m: usize, n: usize, alignment_type: AlignmentType) {
 
-        self.traceback.init(m, n, alignment_type);
+        self.traceback.init(m, n, alignment_type, None);
 
         // set minimum score to -inf, and allow to add gap_extend
         // without overflow
@@ -393,8 +395,8 @@ impl<'a, F> Aligner<'a, F>
                     };
                     (i - 1, j - 1, op)
                 }
-                TBDEL => (i - 1, j, AlignmentOperation::Del),
-                TBINS => (i, j - 1, AlignmentOperation::Ins),
+                TBDEL | TBSDEL => (i - 1, j, AlignmentOperation::Del),
+                TBINS | TBSINS => (i, j - 1, AlignmentOperation::Ins),
                 _ => {
                     break;
                 }
@@ -432,7 +434,9 @@ impl<'a, F> Aligner<'a, F>
                     match self.traceback.get(ii,jj).get(*tb) {
                         TBSUBST => s.push_str(" M"),
                         TBDEL => s.push_str(" D"),
+                        TBSDEL => s.push_str(" d"),
                         TBINS => s.push_str(" I"),
+                        TBSINS => s.push_str(" i"),
                         TBSTART => s.push_str(" S"),
                         _ => (),
                     }
@@ -450,9 +454,9 @@ pub struct TracebackCell {
     v: u8,
 }
 
-const DPOS: u8 = 0x3;
-const SPOS: u8 = 0x3 << 2;
-const IPOS: u8 = 0x3 << 4;  
+const SPOS: u8 = 0x7;
+const DPOS: u8 = 0x3 << 3;
+const IPOS: u8 = 0x3 << 5;  
 
 impl TracebackCell {
     /// Initialize a blank traceback cell
@@ -461,30 +465,30 @@ impl TracebackCell {
     }
 
     #[inline(always)]
-    pub fn set_d(&mut self, value: u8) {
-        self.v = (self.v & !DPOS) | (value)
-    }
-
-    pub fn get_d(&self) -> u8 {
-        self.v & 0x3
-    }
-
-    #[inline(always)]
     pub fn set_s(&mut self, value: u8) {
-        self.v = (self.v & !SPOS) | (value << 2)
+        self.v = (self.v & !SPOS) | (value)
     }
 
     pub fn get_s(&self) -> u8 {
-        (self.v >> 2) & 0x3
+        (self.v) & 0x7
+    }
+
+    #[inline(always)]
+    pub fn set_d(&mut self, value: u8) {
+        self.v = (self.v & !DPOS) | (value << 3)
+    }
+
+    pub fn get_d(&self) -> u8 {
+        (self.v >> 3) & 0x3
     }
 
     #[inline(always)]
     pub fn set_i(&mut self, value: u8) {
-        self.v = (self.v & !IPOS) | (value << 4)
+        self.v = (self.v & !IPOS) | (value << 5)
     }
 
     pub fn get_i(&self) -> u8 {
-        (self.v >> 4) & 0x3
+        (self.v >> 5) & 0x3
     }
 
     pub fn get(&self, which: u8) -> u8 {
@@ -505,14 +509,19 @@ impl TracebackCell {
 
 /// Internal traceback.
 struct Traceback {
+    m: usize,
+    n: usize,
     matrix: Vec<Vec<TracebackCell>>,
+    band: Option<Rc<banded::Band>>
 }
 
 
-const TBSTART: u8 = 0b00;
-const TBSUBST: u8 = 0b01;
-const TBINS: u8 = 0b10;
-const TBDEL: u8 = 0b11;
+const TBSTART: u8 = 0b000;
+const TBSUBST: u8 = 0b001;
+const TBINS: u8 = 0b010;
+const TBDEL: u8 = 0b011;
+const TBSINS: u8 = 0b100;
+const TBSDEL: u8 = 0b101;
 
 impl Traceback {
     fn with_capacity(m: usize, n: usize) -> Self {
@@ -520,10 +529,22 @@ impl Traceback {
         for _ in 0..n + 1 {
             matrix.push(Vec::with_capacity(m+1));
         }
-        Traceback { matrix: matrix }
+        Traceback { matrix: matrix, m: m, n: n, band: None }
     }
 
-    fn init(&mut self, m: usize, n: usize, alignment_type: AlignmentType) {
+    fn get_range(&self, i: usize) -> Range<usize> {
+        match self.band {
+            None => 0 .. self.m+1,
+            Some(ref b) => b.get(i),
+        }
+    }
+
+    #[inline(never)]
+    fn init(&mut self, m: usize, n: usize, alignment_type: AlignmentType, band: Option<Rc<banded::Band>>) {
+        self.m = m;
+        self.n = n;
+        self.band = band;
+
         let mut ins = TracebackCell::new();
         ins.set_all(TBINS);
 
@@ -532,7 +553,7 @@ impl Traceback {
                 // set the first cell to start, the rest to insertions
                 for i in 0..n + 1 {
                     self.matrix[i].clear();
-                    for _ in 0 .. m+1 {
+                    for _ in self.get_range(i) {
                         self.matrix[i].push(ins)
                     }
                 }
@@ -544,7 +565,7 @@ impl Traceback {
                 // set the first cell of each column to start, the rest to insertions
                 for i in 0..n + 1 {
                     self.matrix[i].clear();
-                    for _ in 0 .. m+1 {
+                    for _ in self.get_range(i) {
                         self.matrix[i].push(ins);
                     }
 
@@ -559,7 +580,7 @@ impl Traceback {
 
                 for i in 0..n + 1 {
                     self.matrix[i].clear();
-                    for _ in 0 .. m + 1 {
+                    for _ in self.get_range(i)  {
                         self.matrix[i].push(start);
                     }
                 }
@@ -567,16 +588,22 @@ impl Traceback {
         }
     }
 
+    #[inline(always)]
     fn set(&mut self, i: usize, j: usize, v: TracebackCell) {
-        self.matrix[i][j] = v;
+        let r = self.get_range(i); 
+        self.matrix[i][j-r.start] = v;
     }
 
+    #[inline(always)]
     fn get(&self, i: usize, j: usize) -> &TracebackCell  {
-        self.matrix[i].get(j).unwrap()
+        let r = self.get_range(i);
+        self.matrix[i].get(j-r.start).unwrap()
     }
 
+    #[inline(always)]
     fn get_mut(&mut self, i: usize, j: usize) -> &mut TracebackCell  {
-        self.matrix[i].get_mut(j).unwrap()
+        let r = self.get_range(i); 
+        self.matrix[i].get_mut(j - r.start).unwrap()
     }
 }
 

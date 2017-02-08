@@ -100,6 +100,7 @@ extern crate itertools_num;
 extern crate bit_vec;
 extern crate vec_map;
 extern crate bit_set;
+extern crate smallvec;
 #[macro_use]
 extern crate lazy_static;
 extern crate nalgebra;
