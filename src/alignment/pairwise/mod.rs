@@ -512,16 +512,21 @@ struct Traceback {
     m: usize,
     n: usize,
     matrix: Vec<Vec<TracebackCell>>,
-    band: Option<Rc<banded::Band>>
+    band: Option<Rc<banded::Band>>,
+    default: TracebackCell,
 }
 
 
 const TBSTART: u8 = 0b000;
 const TBSUBST: u8 = 0b001;
+
 const TBINS: u8 = 0b010;
 const TBDEL: u8 = 0b011;
-const TBSINS: u8 = 0b100;
-const TBSDEL: u8 = 0b101;
+
+const TBSINS: u8 = 0b101;
+const TBSDEL: u8 = 0b111;
+
+
 
 impl Traceback {
     fn with_capacity(m: usize, n: usize) -> Self {
@@ -529,7 +534,7 @@ impl Traceback {
         for _ in 0..n + 1 {
             matrix.push(Vec::with_capacity(m+1));
         }
-        Traceback { matrix: matrix, m: m, n: n, band: None }
+        Traceback { matrix: matrix, m: m, n: n, band: None, default: TracebackCell::new() }
     }
 
     fn get_range(&self, i: usize) -> Range<usize> {
@@ -597,7 +602,12 @@ impl Traceback {
     #[inline(always)]
     fn get(&self, i: usize, j: usize) -> &TracebackCell  {
         let r = self.get_range(i);
-        self.matrix[i].get(j-r.start).unwrap()
+        if j >= r.start && j < r.end {
+            self.matrix[i].get(j-r.start).unwrap()
+        } else {
+            &self.default
+        }
+        
     }
 
     #[inline(always)]

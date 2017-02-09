@@ -272,6 +272,8 @@ impl<'a, F> Aligner<'a, F>
             self.traceback = Traceback::with_capacity(1, n);
         }
 
+        println!("{:?}", self.band);
+
         self.traceback.init(m, n, alignment_type, Some(self.band.clone()));
 
         // set minimum score to -inf, and allow to add gap_extend
@@ -371,7 +373,7 @@ impl<'a, F> Aligner<'a, F>
 
         let mut i = yend;
         let mut j = xend;
-        //self.print_traceback_matrices(i,j);
+        self.print_traceback_matrices(i,j);
 
         let mut ops = Vec::with_capacity(x.len());
 
@@ -392,17 +394,21 @@ impl<'a, F> Aligner<'a, F>
                 break;
             }
 
-            let (ii, jj, op) = match which_mat {
-                TBSUBST => {
+            let (ii, jj, op) = match (which_mat,tb) {
+                (TBSUBST, TBSDEL) => (i - 1, j, AlignmentOperation::Del),
+                (TBSUBST, TBSINS) => (i, j - 1, AlignmentOperation::Ins),
+                (TBSUBST, _) => {
                     let op = if y[i - 1] == x[j - 1] {
                         AlignmentOperation::Match
                     } else {
                         AlignmentOperation::Subst
                     };
                     (i - 1, j - 1, op)
-                }
-                TBDEL => (i - 1, j, AlignmentOperation::Del),
-                TBINS => (i, j - 1, AlignmentOperation::Ins),
+                },
+
+
+                (TBDEL, _) => (i - 1, j, AlignmentOperation::Del),
+                (TBINS, _) => (i, j - 1, AlignmentOperation::Ins),
                 _ => {
                     break;
                 }
@@ -411,7 +417,12 @@ impl<'a, F> Aligner<'a, F>
             ops.push(op);
             i = ii;
             j = jj;
-            which_mat = tb;
+            // TBSINS and TBSDEL mean that you came from the S matrix.
+            // Numbering of traceback markers lets us do this:
+            which_mat = match tb { 
+                TBSUBST | TBSINS | TBSDEL => TBSUBST,
+                r => r,
+            }
         }
 
         ops.reverse();
@@ -439,7 +450,9 @@ impl<'a, F> Aligner<'a, F>
                     match self.traceback.get(ii,jj).get(*tb) {
                         TBSUBST => s.push_str(" M"),
                         TBDEL => s.push_str(" D"),
+                        TBSDEL => s.push_str(" d"),
                         TBINS => s.push_str(" I"),
+                        TBSINS => s.push_str(" i"),
                         TBSTART => s.push_str(" S"),
                         _ => (),
                     }
@@ -635,8 +648,35 @@ impl Band {
 
 #[cfg(test)]
 mod banded {
+    use alignment::AlignmentOperation::{Match, Subst, Ins, Del};
     use alignment::pairwise::{self, banded};
     use utils::TextSlice;
+
+    fn fix(b: &str) -> Vec<u8> {
+        b.replace(" ", "").replace("-", "").into_bytes()
+    }
+
+    #[test]
+    fn test_gap_small() {
+        
+        let x = fix("ACCTACGATCACGCTACGCGAGTCA");
+        let y = fix("ACCTACGAT-ACGCT-----AGTCA");
+        let score = |a: u8, b: u8| {
+            if a == b {
+                2i32
+            } else {
+                -4i32
+            }
+        };
+        let mut aligner = banded::Aligner::with_capacity(x.len(), y.len(), -2, -3, -1, &score, 3, 10);
+        let alignment = aligner.local(&x, &y);
+        println!("al: {:?}", alignment);
+        println!("{}, {} \n{}", String::from_utf8_lossy(&x), String::from_utf8_lossy(&y), alignment.pretty(&x, &y));
+        assert_eq!(alignment.ystart, 0);
+        assert_eq!(alignment.xstart, 0);
+        assert_eq!(alignment.operations, [Match, Match, Match, Match, Match, Match, Match, Match, Match, Ins, Match, Match, Match, Match, Match, Ins, Ins, Ins, Ins, Ins, Match, Match, Match, Match, Match]);
+    }
+
 
     // Check that the banded alignment is equivalent to the exhaustive SW alignment
     fn compare_to_full_alignment(x: TextSlice, y: TextSlice) {
@@ -650,7 +690,7 @@ mod banded {
         };
 
         
-        let mut banded_aligner = banded::Aligner::with_capacity(x.len(), y.len(), -6, -5, -1, &score, 10, 10);
+        let mut banded_aligner = banded::Aligner::with_capacity(x.len(), y.len(), -6, -5, -1, &score, 4, 10);
         let banded_alignment = banded_aligner.local(x, y);
 
         let mut full_aligner = pairwise::Aligner::with_capacity(x.len(), y.len(), -5, -1, &score);
@@ -665,6 +705,15 @@ mod banded {
         let y = x.clone();
         compare_to_full_alignment(x,y);
     }
+
+
+    #[test]
+    fn test_multi_gap() {
+        let x = b"TACGATCACGCTACTCTTAGTCA";
+        let y = b"TACGATACGCTTAGTCA";   
+        compare_to_full_alignment(x,y);
+    }
+
 
     /*
     #[test]
