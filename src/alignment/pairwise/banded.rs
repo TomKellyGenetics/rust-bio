@@ -272,8 +272,6 @@ impl<'a, F> Aligner<'a, F>
             self.traceback = Traceback::with_capacity(1, n);
         }
 
-        println!("{:?}", self.band);
-
         self.traceback.init(m, n, alignment_type, Some(self.band.clone()));
 
         // set minimum score to -inf, and allow to add gap_extend
@@ -373,7 +371,6 @@ impl<'a, F> Aligner<'a, F>
 
         let mut i = yend;
         let mut j = xend;
-        self.print_traceback_matrices(i,j);
 
         let mut ops = Vec::with_capacity(x.len());
 
