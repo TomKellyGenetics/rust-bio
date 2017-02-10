@@ -539,10 +539,21 @@ impl Band {
     #[inline(never)]
     pub fn create_local(x: TextSlice, y: TextSlice, k: usize, w: usize, gap_open: i32, gap_extend: i32) -> Band {
         let matches = Band::find_kmer_matches(&x,&y,k);
-        let res = sparse::sdpkpp(&matches, k, 2, gap_open, gap_extend);
-        let ps = res.path[0];
-        let pe = res.path[res.path.len()-1];
-        println!("sparse: rstart:{} tstart:{} rend:{}, tend:{}, hits:{}", matches[ps].0, matches[ps].1, matches[pe].0, matches[pe].1, res.score);
+
+        let (path, score, matches) = {
+            if matches.len() > 0 {
+                let res = sparse::sdpkpp(&matches, k, 2, gap_open, gap_extend);
+                (res.path, res.score, matches)
+            } else { 
+                (vec![0], 0, vec![(0,0)])
+            }
+        };
+
+        let ps = path[0];
+        let pe = path[path.len()-1];
+
+
+        println!("sparse: rstart:{} tstart:{} rend:{}, tend:{}, hits:{}", matches[ps].0, matches[ps].1, matches[pe].0, matches[pe].1, score);
 
         // each entry in matches that is included in the returned path, generates a diagonal line k bases long
         // each gap generates a line from the end of the previous k-match to the start of the next one.
@@ -572,7 +583,7 @@ impl Band {
             ranges[c2].end = max(ranges[c2].end, min(r + w, x.len() + 1));
         };
 
-        for idx in res.path {
+        for idx in path {
             let _m = matches[idx];
             let m = (_m.0 as usize, _m.1 as usize);
 
@@ -672,6 +683,26 @@ mod banded {
         assert_eq!(alignment.ystart, 0);
         assert_eq!(alignment.xstart, 0);
         assert_eq!(alignment.operations, [Match, Match, Match, Match, Match, Match, Match, Match, Match, Ins, Match, Match, Match, Match, Match, Ins, Ins, Ins, Ins, Ins, Match, Match, Match, Match, Match]);
+    }
+
+
+    #[test]
+    fn test_no_kmer_match() {
+        
+        let x = fix("ACCTACGATCACGCTACGCGAGTCA");
+        let y = fix("ACCTGCGATGACGCTAGGCGAGTCA");
+        let score = |a: u8, b: u8| {
+            if a == b {
+                2i32
+            } else {
+                -4i32
+            }
+        };
+        let mut aligner = banded::Aligner::with_capacity(x.len(), y.len(), -2, -3, -1, &score, 6, 6);
+        let alignment = aligner.local(&x, &y);
+        assert_eq!(alignment.ystart, 0);
+        assert_eq!(alignment.xstart, 0);
+        assert_eq!(alignment.operations.len(), x.len());
     }
 
 
