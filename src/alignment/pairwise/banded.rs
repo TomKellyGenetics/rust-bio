@@ -689,7 +689,7 @@ mod banded {
     #[test]
     fn test_no_kmer_match() {
         
-        let x = fix("ACCTACGATCACGCTACGCGAGTCA");
+        let x = fix("ACCTACGATCACGCTACGCGACTCA");
         let y = fix("ACCTGCGATGACGCTAGGCGAGTCA");
         let score = |a: u8, b: u8| {
             if a == b {
@@ -698,13 +698,32 @@ mod banded {
                 -4i32
             }
         };
-        let mut aligner = banded::Aligner::with_capacity(x.len(), y.len(), -2, -3, -1, &score, 6, 6);
+
+        let mut aligner = banded::Aligner::with_capacity(x.len(), y.len(), -2, -3, -1, &score, 8, 6);
         let alignment = aligner.local(&x, &y);
         assert_eq!(alignment.ystart, 0);
         assert_eq!(alignment.xstart, 0);
         assert_eq!(alignment.operations.len(), x.len());
     }
 
+    #[test]
+    fn test_1_kmer_match() {
+        
+        let x = fix("ACCTACGATCACGCTACGCGGCTCA");
+        let y = fix("ACCTGCGATGACGCTAGGCGGCTCA");
+        let score = |a: u8, b: u8| {
+            if a == b {
+                2i32
+            } else {
+                -4i32
+            }
+        };
+        let mut aligner = banded::Aligner::with_capacity(x.len(), y.len(), -2, -3, -1, &score, 8, 6);
+        let alignment = aligner.local(&x, &y);
+        assert_eq!(alignment.ystart, 0);
+        assert_eq!(alignment.xstart, 0);
+        assert_eq!(alignment.operations.len(), x.len());
+    }
 
     // Check that the banded alignment is equivalent to the exhaustive SW alignment
     fn compare_to_full_alignment(x: TextSlice, y: TextSlice) {

@@ -213,6 +213,7 @@ pub fn sdpkpp(matches: &Vec<(u32, u32)>, k: usize, match_score: u32, gap_open: i
         if is_start {
             // Default case -- chain starts at this node
             dp[p] = (k * match_score, -1);
+            best_dp = max(best_dp, (dp[p].0, p as i32));
 
             // Find best previous chain, and extend. 
             let best_prev = max_col_dp.get(j as usize);
@@ -249,6 +250,7 @@ pub fn sdpkpp(matches: &Vec<(u32, u32)>, k: usize, match_score: u32, gap_open: i
 
     let mut traceback = Vec::new();
     let (best_score, mut prev_match) = best_dp;
+
     while prev_match >= 0 {
         traceback.push(prev_match as usize);
         prev_match = dp[prev_match as usize].1;
