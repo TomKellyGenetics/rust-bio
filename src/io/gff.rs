@@ -77,9 +77,10 @@ impl<R: io::Read> Reader<R> {
     /// Create a new GFF reader given an instance of `io::Read`, in given format.
     pub fn new(reader: R, fileformat: GffType) -> Self {
         Reader {
-            inner: csv::Reader::from_reader(reader)
+            inner: csv::ReaderBuilder::new()
                 .delimiter(b'\t')
-                .has_headers(false),
+                .has_headers(false)
+                .from_reader(reader),
             gff_type: fileformat,
         }
     }
@@ -92,7 +93,7 @@ impl<R: io::Read> Reader<R> {
                     term = term as char);
         let attribute_re = Regex::new(&r).unwrap();
         Records {
-            inner: self.inner.decode(),
+            inner: self.inner.deserialize(),
             attribute_re: attribute_re,
         }
     }
@@ -101,9 +102,9 @@ impl<R: io::Read> Reader<R> {
 
 /// A GFF record.
 pub struct Records<'a, R: 'a + io::Read> {
-    inner: csv::DecodedRecords<'a,
-                               R,
-                               (String, String, String, u64, u64, String, String, String, String)>,
+    inner: csv::DeserializeRecordsIter<'a,
+                                       R,
+                                       (String, String, String, u64, u64, String, String, String, String)>,
     attribute_re: Regex,
 }
 
@@ -168,9 +169,10 @@ impl<W: io::Write> Writer<W> {
         let (delim, termi) = fileformat.separator();
 
         Writer {
-            inner: csv::Writer::from_writer(writer)
+            inner: csv::WriterBuilder::new()
                 .delimiter(b'\t')
-                .flexible(true),
+                .flexible(true)
+                .from_writer(writer),
             delimiter: delim as char,
             terminator: String::from_utf8(vec![termi]).unwrap(),
         }
@@ -189,15 +191,15 @@ impl<W: io::Write> Writer<W> {
         };
 
         self.inner
-            .encode((&record.seqname,
-                     &record.source,
-                     &record.feature_type,
-                     record.start,
-                     record.end,
-                     &record.score,
-                     &record.strand,
-                     &record.frame,
-                     attributes))
+            .serialize((&record.seqname,
+                        &record.source,
+                        &record.feature_type,
+                        record.start,
+                        record.end,
+                        &record.score,
+                        &record.strand,
+                        &record.frame,
+                        attributes))
     }
 }
 
@@ -479,8 +481,7 @@ P0A7B8\tUniProtKB\tChain\t2\t176\t50\t+\t.\tID PRO_0000148105
                 .ok()
                 .expect("Error writing record");
         }
-        assert_eq!(writer.inner.as_string(),
-                   String::from_utf8_lossy(GFF_FILE_ONE_ATTRIB))
+        assert_eq!(writer.inner.into_inner().unwrap(), GFF_FILE_ONE_ATTRIB)
     }
 
     #[test]
@@ -493,8 +494,7 @@ P0A7B8\tUniProtKB\tChain\t2\t176\t50\t+\t.\tID PRO_0000148105
                 .ok()
                 .expect("Error writing record");
         }
-        assert_eq!(writer.inner.as_string(),
-                   String::from_utf8_lossy(GTF_FILE_ONE_ATTRIB))
+        assert_eq!(writer.inner.into_inner().unwrap(), GTF_FILE_ONE_ATTRIB)
     }
 
     #[test]
@@ -507,7 +507,6 @@ P0A7B8\tUniProtKB\tChain\t2\t176\t50\t+\t.\tID PRO_0000148105
                 .ok()
                 .expect("Error writing record");
         }
-        assert_eq!(writer.inner.as_string(),
-                   String::from_utf8_lossy(GFF_FILE_ONE_ATTRIB))
+        assert_eq!(writer.inner.into_inner().unwrap(), GFF_FILE_ONE_ATTRIB)
     }
 }
