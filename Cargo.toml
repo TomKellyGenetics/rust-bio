@@ -36,7 +36,7 @@ quick-error = "*"
 regex = "0.2"
 multimap = "0.4"
 fxhash = "0.1.2"
-rust-htslib = "0.12.1"
+rust-htslib = "0.13.0"
 
 [dependencies.vec_map]
 version = "0.8"
